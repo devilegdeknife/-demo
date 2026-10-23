@@ -459,11 +459,16 @@
     if (!game.dead) {
       const bx = Math.round(P.x - camX - 8), by = Math.round(P.y - camY + 11);
       ctx.fillStyle = '#140c1c';
-      ctx.fillRect(bx - 1, by - 1, 18, 4);
+      ctx.fillRect(bx - 1, by - 1, 18, 7);
       ctx.fillStyle = '#442434';
       ctx.fillRect(bx, by, 16, 2);
       ctx.fillStyle = P.hp / P.maxHp < 0.3 ? '#ff004d' : '#d04648';
       ctx.fillRect(bx, by, Math.max(0, Math.round((16 * P.hp) / P.maxHp)), 2);
+      // 体力条：可冲刺时为黄色，不足一次冲刺时为暗橙色
+      ctx.fillStyle = '#2a2036';
+      ctx.fillRect(bx, by + 3, 16, 2);
+      ctx.fillStyle = P.sta >= PS.CONST.DASH_COST ? '#dad45e' : '#9a5a2a';
+      ctx.fillRect(bx, by + 3, Math.max(0, Math.round((16 * P.sta) / P.staMax)), 2);
     }
 
     // 屏幕外指示
@@ -573,7 +578,14 @@
     const flip = P.facing < 0;
     let img = flip ? fr.f : fr.n;
     if (P.iframes > 0 && game.hurtFlash > 0.1) img = flip ? fr.wf : fr.w;
-    const blink = P.iframes > 0 && Math.floor(t * 20) % 2 === 0;
+    const blink = P.iframes > 0 && P.dashT <= 0 && Math.floor(t * 20) % 2 === 0;
+    // 冲刺残影
+    const ghost = flip ? fr.wf : fr.w;
+    for (const tr of P.trail) {
+      ctx.globalAlpha = Math.max(0, 0.45 * (1 - tr.t / 0.22));
+      ctx.drawImage(ghost, Math.round(tr.x - camX - ghost.width / 2), Math.round(tr.y - camY - ghost.height / 2));
+    }
+    ctx.globalAlpha = 1;
     const x = Math.round(P.x - camX - img.width / 2), y = Math.round(P.y - camY - img.height / 2 - (fi ? 1 : 0));
     const sh = PS.shadow(12);
     ctx.drawImage(sh, Math.round(P.x - camX - 6), Math.round(P.y - camY + 6));

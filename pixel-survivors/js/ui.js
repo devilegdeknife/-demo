@@ -25,8 +25,13 @@
         </div>
       </div>
       <div class="bossbar hidden"><div class="bname"></div><div class="bbar"><div class="bfill"></div></div></div>
-      <button class="pausebtn" title="暂停 (ESC)">❚❚</button>`;
+      <button class="pausebtn" title="暂停 (ESC)">❚❚</button>
+      <button class="dashbtn" title="冲刺 (Shift / 空格)">冲刺</button>`;
     UI.hud.querySelector('.pausebtn').addEventListener('click', () => PS.app.pause());
+    UI.hud.querySelector('.dashbtn').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      PS.app.dash();
+    });
     UI.h = {
       xpfill: $('.xpfill', UI.hud), lv: $('.lv', UI.hud), timer: $('.timer', UI.hud), kills: $('.kills', UI.hud), gold: $('.gold', UI.hud),
       wslots: $('.wslots', UI.hud), pslots: $('.pslots', UI.hud), boss: $('.bossbar', UI.hud), bname: $('.bname', UI.hud), bfill: $('.bfill', UI.hud),
@@ -133,9 +138,11 @@
   };
 
   // 输入动作入口
-  UI.action = function (a) {
+  UI.action = function (a, src, data) {
     if (!UI.cur) {
-      if ((a === 'pause' || a === 'back') && PS.app.state === 'play') PS.app.pause();
+      if (PS.app.state !== 'play') return;
+      if (a === 'pause' || a === 'back') PS.app.pause();
+      else if ((a === 'dash' || a === 'confirm' || a === 'banish') && !(data && data.repeat)) PS.app.dash(data);
       return;
     }
     const el = UI.focusEl;
@@ -240,9 +247,9 @@
         </div>
         ${goldLine()}
         <div class="controls">
-          <div><b>键盘</b> WASD / 方向键 移动 · 回车 / 空格 确认 · ESC 返回 / 暂停</div>
-          <div><b>鼠标</b> 点击菜单 · 按住画面拖动角色移动</div>
-          <div><b>手柄</b> 左摇杆 / 十字键 移动 · A 确认 · B 返回 · Start 暂停</div>
+          <div><b>键盘</b> WASD / 方向键 移动 · Shift / 空格 冲刺 · 回车 确认 · ESC 返回 / 暂停</div>
+          <div><b>鼠标</b> 点击菜单 · 按住左键拖动移动 · 右键朝光标冲刺</div>
+          <div><b>手柄</b> 左摇杆 / 十字键 移动 · A / RT 冲刺 · A 确认 · B 返回 · Start 暂停</div>
         </div>
       </div>`;
     },
@@ -728,6 +735,7 @@
       ['贪婪', Math.round(s.greed * 100) + '%'],
       ['拾取', Math.round(s.magnet * 100) + '%'],
       ['复活', g.P.revivals],
+      ['体力', Math.floor(g.P.sta) + ' / ' + g.P.staMax],
     ];
     return rows.map(([k, v]) => `<div class="st"><span>${k}</span><b>${v}</b></div>`).join('');
   }

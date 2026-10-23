@@ -11,7 +11,14 @@
   const BASE_MAGNET = 36;
   const ELITE_HP = 18;
   const IFRAMES = 0.45;
-  PS.CONST = { MAX_ENEMIES, MAX_GEMS };
+  // 冲刺与体力
+  const STAMINA_MAX = 100;
+  const DASH_COST = 30;
+  const DASH_TIME = 0.18;
+  const DASH_SPEED = 3.4; // 相对移动速度的倍数
+  const STAMINA_REGEN = 25;
+  const STAMINA_DELAY = 0.6;
+  PS.CONST = { MAX_ENEMIES, MAX_GEMS, STAMINA_MAX, DASH_COST };
 
   // 障碍物碰撞半径（0 = 纯装饰）
   const OBS = { tomb: 6, tomb2: 5, deadtree: 4, pine: 6, bush: 6, rock: 6, pillar: 7, lavarock: 6, bones: 0 };
@@ -74,7 +81,8 @@
       this.skips = ms.skip || 0;
       this.banishes = ms.banish || 0;
 
-      this.P = { x: this.mapW / 2, y: this.mapH / 2, r: 5, hp: 0, maxHp: 0, iframes: 0, facing: 1, dirX: 1, dirY: 0, moving: false, anim: 0, st: null };
+      this.P = { x: this.mapW / 2, y: this.mapH / 2, r: 5, hp: 0, maxHp: 0, iframes: 0, facing: 1, dirX: 1, dirY: 0, moving: false, anim: 0, st: null,
+        sta: STAMINA_MAX, staMax: STAMINA_MAX, staDelay: 0, dashT: 0, dashCd: 0, dashInv: 0, dashX: 0, dashY: 0, dashReq: null, trail: [] };
       this.recalcStats();
       this.P.hp = this.P.maxHp;
       this.P.revivals = this.P.st.revival;
@@ -523,11 +531,67 @@
       }
     }
 
+    // 请求冲刺：dir 为可选方向（例如鼠标右键指向），否则使用移动 / 面朝方向
+    requestDash(dir) {
+      this.P.dashReq = dir || {};
+    }
+
+    updateDash(dt, mv) {
+      const P = this.P;
+      if (P.dashCd > 0) P.dashCd -= dt;
+      if (P.dashInv > 0) P.dashInv -= dt;
+      if (P.staDelay > 0) P.staDelay -= dt;
+      else if (P.sta < P.staMax) P.sta = Math.min(P.staMax, P.sta + STAMINA_REGEN * dt);
+      const req = P.dashReq;
+      P.dashReq = null;
+      if (req && P.dashT <= 0 && P.dashCd <= 0) {
+        if (P.sta < DASH_COST) {
+          PS.audio.sfx('deny');
+        } else {
+          let dx = req.x, dy = req.y;
+          if (dx === undefined) {
+            const moving = mv.x !== 0 || mv.y !== 0;
+            dx = moving ? mv.x : P.dirX;
+            dy = moving ? mv.y : P.dirY;
+          }
+          const l = Math.hypot(dx, dy) || 1;
+          P.dashX = dx / l;
+          P.dashY = dy / l;
+          P.dirX = P.dashX;
+          P.dirY = P.dashY;
+          if (Math.abs(P.dashX) > 0.15) P.facing = P.dashX > 0 ? 1 : -1;
+          P.sta -= DASH_COST;
+          P.staDelay = STAMINA_DELAY;
+          P.dashT = DASH_TIME;
+          P.dashCd = DASH_TIME + 0.12;
+          P.dashInv = DASH_TIME + 0.08;
+          P.trail.length = 0;
+          PS.audio.sfx('dash');
+          for (let i = 0; i < 6; i++) this.addPart(P.x, P.y + 5, -P.dashX * U.rand(20, 60) + U.rand(-15, 15), U.rand(-25, 0), 0.35, '#c2c3c7', 1, 60);
+        }
+      }
+      if (P.dashT > 0) {
+        P.dashT -= dt;
+        const spd = PLAYER_SPEED * P.st.move * DASH_SPEED;
+        P.x += P.dashX * spd * dt;
+        P.y += P.dashY * spd * dt;
+        P.trail.push({ x: P.x, y: P.y, t: 0 });
+        P.anim += dt * 2;
+        return true;
+      }
+      return false;
+    }
+
     updatePlayer(dt, mv) {
       const P = this.P;
       const spd = PLAYER_SPEED * P.st.move;
-      P.moving = mv.x !== 0 || mv.y !== 0;
-      if (P.moving) {
+      for (let i = P.trail.length - 1; i >= 0; i--) {
+        P.trail[i].t += dt;
+        if (P.trail[i].t > 0.22) P.trail.splice(i, 1);
+      }
+      const dashing = this.updateDash(dt, mv);
+      P.moving = dashing || mv.x !== 0 || mv.y !== 0;
+      if (!dashing && P.moving) {
         P.x += mv.x * spd * dt;
         P.y += mv.y * spd * dt;
         const l = Math.hypot(mv.x, mv.y);
@@ -652,7 +716,7 @@
 
     contactDamage() {
       const P = this.P;
-      if (P.iframes > 0) return;
+      if (P.iframes > 0 || P.dashInv > 0) return;
       const list = this.grid.query(P.x, P.y, P.r + 24);
       for (const e of list) {
         if (e.dead || e.prop || e.intangible || (e.z && e.z > 8) || e.frozenT > 0) continue;
@@ -838,7 +902,7 @@
           continue;
         }
         const rr = b.r + P.r;
-        if (U.dist2(b.x, b.y, P.x, P.y) < rr * rr && P.iframes <= 0) {
+        if (U.dist2(b.x, b.y, P.x, P.y) < rr * rr && P.iframes <= 0 && P.dashInv <= 0) {
           this.hurtPlayer(b.dmg, 'bullet');
           // 受伤可能触发复活冲击波并清空子弹数组
           if (i < this.ebullets.length && this.ebullets[i] === b) U.removeAt(this.ebullets, i);
@@ -983,7 +1047,7 @@
 
     hurtPlayer(raw, src) {
       const P = this.P;
-      if (P.iframes > 0 || this.ending) return;
+      if (P.iframes > 0 || P.dashInv > 0 || this.ending) return;
       const dmg = Math.max(1, Math.round(raw - P.st.armor));
       P.hp -= dmg;
       if (PS.debug.log) {
@@ -1141,25 +1205,20 @@
         }
         if (!p.mag && d2 < mr2) {
           p.mag = true;
-          const d = Math.sqrt(d2) || 1;
-          p.vx = (-dx / d) * 70;
-          p.vy = (-dy / d) * 70;
+          p.mt = 0;
         }
         if (p.mag) {
           const d = Math.sqrt(d2) || 1;
-          if (d < 9) {
+          if (d < 10) {
             this.collect(p, i);
             continue;
           }
-          p.vx += (dx / d) * 1000 * dt;
-          p.vy += (dy / d) * 1000 * dt;
-          const sp = Math.hypot(p.vx, p.vy), mx = 420;
-          if (sp > mx) {
-            p.vx *= mx / sp;
-            p.vy *= mx / sp;
-          }
-          p.x += p.vx * dt;
-          p.y += p.vy * dt;
+          // 直接朝玩家飞行（不保留横向速度），否则宝石会像行星一样绕着玩家转圈
+          p.mt = (p.mt || 0) + dt;
+          const sp = p.mt < 0.1 ? -60 : Math.min(520, 120 + p.mt * 900);
+          const step = Math.min(sp * dt, d - 2);
+          p.x += (dx / d) * step;
+          p.y += (dy / d) * step;
         }
       }
     }
@@ -1187,7 +1246,7 @@
           for (const q of this.pickups) {
             if (q.type === 'gem' && !q.mag) {
               q.mag = true;
-              q.vx = q.vy = 0;
+              q.mt = 0.1;
             }
           }
           PS.audio.sfx('pickup');
@@ -1326,6 +1385,7 @@
         if (s > bestS) { bestS = s; best = { x: dx, y: dy }; }
       }
       this.botDir = best;
+      if (bestS < -25 && P.sta >= DASH_COST && P.dashT <= 0 && (best.x || best.y)) this.requestDash(best);
       // 人类会在挥鞭前短暂转向敌人；机器人直接设置朝向来模拟这一操作
       const whip = this.weapons.find((w) => w.def.type === 'slash');
       if (whip && whip.cd < 0.1 && near.length) {

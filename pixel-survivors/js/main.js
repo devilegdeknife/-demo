@@ -99,6 +99,19 @@
     PS.ui.toast(o.kind === 'gold' ? '升级奖励：+' + Math.round(o.v * g.P.st.greed) + ' 金币' : '升级奖励：回复 ' + o.v + ' 生命', 'good');
     return true;
   }
+  // 冲刺：data.pointer 表示朝鼠标光标方向
+  app.dash = function (data) {
+    const g = app.game;
+    if (!g || app.state !== 'play') return;
+    let dir = null;
+    if (data && data.pointer) {
+      const ps = PS.render.worldToClient(g.P.x, g.P.y);
+      const dx = PS.input.pointer.x - ps.x, dy = PS.input.pointer.y - ps.y;
+      if (Math.hypot(dx, dy) > 4) dir = { x: dx, y: dy };
+    }
+    g.requestDash(dir);
+  };
+
   app.openLevelUp = function () {
     const g = app.game;
     PS.ui.banishMode = false;
