@@ -59,7 +59,7 @@
     },
     knife: {
       name: '飞刀', icon: 'i_knife', type: 'facing', pspr: 'p_knife',
-      desc: '朝移动方向快速掷出飞刀，会自动瞄准前方的敌人。',
+      desc: '快速掷出飞刀，自动瞄准前方最近的敌人（站定时瞄准任意方向）。',
       base: { dmg: 7, cd: 1.0, amount: 1, area: 1, speed: 1, dur: 0, pierce: 1, kb: 0.4 },
       levels: [{ amount: 1 }, { amount: 1, dmg: 5 }, { amount: 1 }, { pierce: 1 }, { amount: 1 }, { amount: 1, dmg: 5 }, { pierce: 1 }],
       evo: { with: 'wings', into: 'thousand' },
@@ -108,7 +108,7 @@
     },
     firewand: {
       name: '火焰权杖', icon: 'i_fire', type: 'fireball', pspr: 'p_fire',
-      desc: '向随机敌人发射爆炸火球。',
+      desc: '发射爆炸火球：第一发瞄准最近的敌人，其余随机攻击。',
       base: { dmg: 20, cd: 3.0, amount: 2, area: 1, speed: 1, dur: 0, pierce: 1, kb: 0.5 },
       levels: [{ dmg: 10 }, { dmg: 10, speed: 0.2 }, { amount: 1 }, { dmg: 10 }, { amount: 1, speed: 0.2 }, { dmg: 10 }, { amount: 1 }],
       evo: { with: 'spinach', into: 'hellfire' },

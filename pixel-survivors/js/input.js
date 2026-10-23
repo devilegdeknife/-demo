@@ -18,15 +18,17 @@
     Enter: 'confirm', Space: 'confirm', NumpadEnter: 'confirm',
     Escape: 'back', Backspace: 'back', KeyP: 'pause',
     KeyR: 'reroll', KeyF: 'skip', KeyB: 'banish',
+    ShiftLeft: 'dash', ShiftRight: 'dash', KeyK: 'dash',
     Digit1: 'opt1', Digit2: 'opt2', Digit3: 'opt3', Digit4: 'opt4',
     Numpad1: 'opt1', Numpad2: 'opt2', Numpad3: 'opt3', Numpad4: 'opt4',
     F11: null,
   };
   // 手柄按键（标准映射）
-  const GP_ACTIONS = { 0: 'confirm', 1: 'back', 2: 'reroll', 3: 'skip', 4: 'banish', 5: 'banish', 8: 'back', 9: 'pause', 12: 'up', 13: 'down', 14: 'left', 15: 'right' };
+  // 对局中 A / LB / RB / LT / RT 均为冲刺（由界面层根据状态解释）
+  const GP_ACTIONS = { 0: 'confirm', 1: 'back', 2: 'reroll', 3: 'skip', 4: 'banish', 5: 'banish', 6: 'dash', 7: 'dash', 8: 'back', 9: 'pause', 12: 'up', 13: 'down', 14: 'left', 15: 'right' };
 
-  function emit(a, src) {
-    if (I.onAction) I.onAction(a, src);
+  function emit(a, src, data) {
+    if (I.onAction) I.onAction(a, src, data);
   }
 
   I.init = function (canvas) {
@@ -38,7 +40,7 @@
       if (a !== undefined) {
         // 阻止空格/方向键滚动页面
         if (e.code !== 'F11') e.preventDefault();
-        if (a) emit(a, 'kb');
+        if (a) emit(a, 'kb', { repeat: e.repeat });
       }
     });
     window.addEventListener('keyup', (e) => {
@@ -56,6 +58,11 @@
       if (PS.audio) PS.audio.init();
       I.lastDevice = 'mouse';
       setPtr(e);
+      // 鼠标右键：朝光标方向冲刺
+      if (e.button === 2) {
+        emit('dash', 'mouse', { pointer: true });
+        return;
+      }
       I.pointer.down = true;
       try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     });

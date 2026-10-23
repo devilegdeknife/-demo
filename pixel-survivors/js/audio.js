@@ -118,6 +118,7 @@
         }
         break;
       case 'select': tone('pulse', 660, 990, 0.06, 0.07); break;
+      case 'dash': noise(0.14, 0.1, 1800, 0, 'bandpass', 5000); tone('triangle', 300, 900, 0.1, 0.05); break;
       case 'move': tone('square', 440, 0, 0.03, 0.035); break;
       case 'back': tone('square', 330, 220, 0.07, 0.06); break;
       case 'deny': tone('square', 110, 90, 0.12, 0.08); break;

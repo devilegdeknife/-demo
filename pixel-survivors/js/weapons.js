@@ -132,12 +132,12 @@
       const P = g.P;
       const off = U.rand(-5, 5);
       let nx = P.dirX, ny = P.dirY;
-      // 轻度辅助瞄准：移动方向 ±50° 内的最近敌人
-      let best = null, bd = 230 * 230;
+      // 自动瞄准：移动时瞄准前方半圆内最近的敌人，站立不动时瞄准任意方向最近的敌人
+      let best = null, bd = 260 * 260;
       for (const e of g.enemies) {
         if (e.dead || e.intangible) continue;
         const dx = e.x - P.x, dy = e.y - P.y, d2 = dx * dx + dy * dy;
-        if (d2 < bd && (dx * nx + dy * ny) > Math.sqrt(d2) * 0.64) { bd = d2; best = e; }
+        if (d2 < bd && (!P.moving || dx * nx + dy * ny > 0)) { bd = d2; best = e; }
       }
       if (best) {
         const d = Math.sqrt(bd) || 1;
@@ -202,14 +202,17 @@
     fire(g, w) {
       queueShots(w, g.wAmount(w), 0.15);
     },
-    shot(g, w) {
+    shot(g, w, q) {
       const P = g.P;
       const t = nearestEnemy(g, P.x, P.y, 360);
       let ang = t ? Math.atan2(t.y - P.y, t.x - P.x) : Math.atan2(P.dirY, P.dirX);
-      ang += U.rand(-0.15, 0.15);
+      // 第一发精确瞄准，其余略微散开
+      if (q && q.i > 0) ang += (q.i % 2 ? 1 : -1) * Math.ceil(q.i / 2) * 0.18;
       const sp = 235 * g.wSpeed(w), area = g.wArea(w);
+      // 根据目标距离调整减速度，保证十字能飞到目标处再折返（最远约 210 像素）
+      const range = t ? U.clamp(Math.hypot(t.x - P.x, t.y - P.y) + 14, 80, 210) : 92;
       addProj(g, {
-        kind: 'boom', w, x: P.x, y: P.y, dx: Math.cos(ang), dy: Math.sin(ang), v: sp, acc: -sp * 1.25, life: 3.2, r: 6 * area,
+        kind: 'boom', w, x: P.x, y: P.y, dx: Math.cos(ang), dy: Math.sin(ang), v: sp, acc: -(sp * sp) / (2 * range), life: 3.2, r: 6 * area,
         hitDelay: w.st.hitDelay, dmg: g.wDmg(w), kb: w.st.kb, spr: w.def.evolved ? 'i_heaven' : 'p_cross', rot: 0, scale: area,
       });
       PS.audio.sfx('shoot');
@@ -385,10 +388,12 @@
     fire(g, w) {
       queueShots(w, g.wAmount(w), 0.08);
     },
-    shot(g, w) {
+    shot(g, w, q) {
       const P = g.P;
-      const t = randomInView(g, -10);
-      let ang = t ? Math.atan2(t.y - P.y, t.x - P.x) + U.rand(-0.12, 0.12) : Math.random() * Math.PI * 2;
+      // 每轮第一发瞄准最近的敌人，其余随机攻击画面内的敌人
+      const first = !q || q.i === 0;
+      const t = first ? nearestEnemy(g, P.x, P.y, 360) || randomInView(g, -10) : randomInView(g, -10);
+      let ang = t ? Math.atan2(t.y - P.y, t.x - P.x) + (first ? 0 : U.rand(-0.12, 0.12)) : Math.random() * Math.PI * 2;
       const sp = 140 * g.wSpeed(w), area = g.wArea(w);
       const evo = !!w.def.evolved;
       addProj(g, {

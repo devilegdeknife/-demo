@@ -21,6 +21,23 @@ const FAKE_PAD = () => {
 };
 
 let passed = 0;
+// 在页面中注册：清空敌人、停止刷怪并关闭升级弹窗，让需要精确操作的测试不受干扰
+const CALM = () => {
+  window.addEventListener('DOMContentLoaded', () => {
+    PS.debug.calm = () => {
+      const g = PS.app.game;
+      g.updateSpawns = () => {};
+      for (const e of g.enemies) e.dead = true;
+      g.enemies.length = 0;
+      g.bosses.length = 0;
+      g.ebullets.length = 0;
+      g.hazards.length = 0;
+      g.pendingLevels = 0;
+      g.xp = 0;
+      if (PS.app.state !== 'play') PS.app.resume();
+    };
+  });
+};
 async function step(name, fn) {
   process.stdout.write('  · ' + name + ' ... ');
   await fn();
@@ -32,6 +49,7 @@ async function step(name, fn) {
   const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   await ctx.addInitScript(FAKE_PAD);
+  await ctx.addInitScript(CALM);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -143,6 +161,83 @@ async function step(name, fn) {
     await page.keyboard.up('KeyD');
     const x1 = await page.evaluate(() => PS.app.game.P.x);
     assert.ok(x1 - x0 > 15, 'moved ' + (x1 - x0));
+  });
+
+  await step('冲刺：Shift 冲刺消耗体力、冲刺中无敌、体力不足时无法冲刺', async () => {
+    await page.evaluate(() => { PS.debug.calm(); const g = PS.app.game; g.P.sta = 100; g.P.dashCd = 0; });
+    const x0 = await page.evaluate(() => PS.app.game.P.x);
+    await page.keyboard.down('KeyA');
+    await page.keyboard.press('ShiftLeft');
+    await wait(page, 60);
+    const mid = await page.evaluate(() => { const g = PS.app.game; const hp = g.P.hp; g.hurtPlayer(50, 'test'); return { inv: g.P.hp === hp, sta: g.P.sta }; });
+    await wait(page, 300);
+    await page.keyboard.up('KeyA');
+    const x1 = await page.evaluate(() => PS.app.game.P.x);
+    assert.ok(mid.inv, '冲刺中应当无敌');
+    assert.ok(mid.sta <= 71, 'stamina ' + mid.sta);
+    assert.ok(x0 - x1 > 60, 'dash moved ' + (x0 - x1));
+    await page.evaluate(() => { const g = PS.app.game; g.P.sta = 10; g.P.dashCd = 0; g.P.dashT = 0; });
+    const x2 = await page.evaluate(() => PS.app.game.P.x);
+    await page.keyboard.press('ShiftLeft');
+    await wait(page, 200);
+    assert.ok(Math.abs((await page.evaluate(() => PS.app.game.P.x)) - x2) < 5);
+    await page.evaluate(() => { PS.app.game.P.sta = 100; });
+  });
+
+  await step('经验宝石：移动中也会被直接吸取，不会绕着角色转圈', async () => {
+    const r = await page.evaluate(() => {
+      const g = PS.app.game;
+      g.pickups.length = 0;
+      g.gemCount = 0;
+      const P = g.P;
+      const mine = [];
+      for (let i = 0; i < 12; i++) { const a = (i / 12) * 6.28; mine.push(g.addPickup('gem', P.x + Math.cos(a) * 30, P.y + Math.sin(a) * 30, 0.01)); }
+      let t = 0;
+      while (mine.some((q) => !q.dead) && t < 3) { g.update(1 / 60, { x: Math.cos(t * 3), y: Math.sin(t * 3) }); t += 1 / 60; }
+      g.pendingLevels = 0;
+      return { left: mine.filter((q) => !q.dead).length, t };
+    });
+    assert.strictEqual(r.left, 0, '仍有 ' + r.left + ' 颗宝石未被吸取');
+    assert.ok(r.t < 1, 'took ' + r.t);
+  });
+
+  await step('自动瞄准：魔杖 / 十字 / 火球 / 飞刀 首发命中最近的敌人', async () => {
+    const res = await page.evaluate(() => {
+      const out = {};
+      const saved = PS.app.game;
+      for (const wid of ['wand', 'cross', 'firewand', 'knife']) {
+        let ok = 0;
+        for (let k = 0; k < 6; k++) {
+          const g = new PS.Game('mage', 'graveyard');
+          g.updateSpawns = () => {};
+          g.braziers.length = 0;
+          g.weapons.length = 0;
+          g.addWeapon(wid).cd = 0.05;
+          const P = g.P;
+          for (let i = 0; i < 6; i++) {
+            const a = Math.random() * 6.28, d = 70 + Math.random() * 150;
+            const e = g.spawnEnemy('zombie', P.x + Math.cos(a) * d, P.y + Math.sin(a) * d, { force: true });
+            e.hp = e.maxHp = 1e9;
+            e.spd = 0;
+          }
+          // 敌人生成后会被分离推挤，因此在每帧开火前重新计算最近的敌人
+          // 记录第一次命中那一帧受伤的全部敌人（火球爆炸会同时波及相邻敌人）
+          let hits = [], near = null;
+          const orig = g.damageEnemy.bind(g);
+          g.damageEnemy = (e, ...r) => { if (!e.prop) hits.push(e); return orig(e, ...r); };
+          const dist = (e) => Math.hypot(e.x - P.x, e.y - P.y);
+          for (let s = 0; s < 150 && !hits.length; s++) {
+            near = g.enemies.reduce((m, e) => (dist(e) < dist(m) ? e : m));
+            g.update(1 / 60, { x: 0, y: 0 });
+          }
+          if (hits.includes(near)) ok++;
+        }
+        out[wid] = ok;
+      }
+      PS.app.game = saved;
+      return out;
+    });
+    for (const k in res) assert.strictEqual(res[k], 6, k + ' 只有 ' + res[k] + '/6 次命中最近敌人');
   });
 
   await step('ESC 暂停并显示构筑，确认继续', async () => {
@@ -340,6 +435,21 @@ async function step(name, fn) {
     await press(0);
     await wait(page, 50);
     await page.evaluate(() => { window.__padOn = false; });
+  });
+
+  await step('右键朝光标冲刺、手柄 RT 冲刺', async () => {
+    await page.evaluate(() => { PS.debug.calm(); const g = PS.app.game; g.P.sta = 100; g.P.dashCd = 0; });
+    const ps = await page.evaluate(() => PS.render.worldToClient(PS.app.game.P.x, PS.app.game.P.y));
+    const y0 = await page.evaluate(() => PS.app.game.P.y);
+    await page.mouse.click(ps.x, ps.y + 200, { button: 'right' });
+    await wait(page, 300);
+    assert.ok((await page.evaluate(() => PS.app.game.P.y)) - y0 > 40, '右键冲刺应朝光标（下方）移动');
+    await page.evaluate(() => { const g = PS.app.game; g.P.sta = 100; g.P.dashCd = 0; window.__padOn = true; });
+    await page.evaluate(() => { window.__pad.buttons[7] = { pressed: true, touched: true, value: 1 }; });
+    await wait(page, 60);
+    await page.evaluate(() => { window.__pad.buttons[7] = { pressed: false, touched: false, value: 0 }; window.__padOn = false; });
+    await wait(page, 50);
+    assert.ok((await page.evaluate(() => PS.app.game.P.sta)) < 80, 'RT 应当消耗体力冲刺');
   });
 
   await step('存档持久化：刷新后金币与强化保留', async () => {
