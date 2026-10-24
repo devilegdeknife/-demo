@@ -1,6 +1,7 @@
 // 长时间稳定性 / 不变量测试：AI 机器人在每个关卡、多个角色下完整游玩（快进），
 // 每 5 秒检查一次数值合法性，并打印各局的进程与平衡数据。
-// 运行：node tests/sim.test.js [每组局数=1] [是否满级局外强化=0/1]
+// 运行：node tests/sim.test.js [每组局数=1] [是否满级局外强化=0/1] [endless]
+//       第三个参数为 endless 时测试无尽模式（以角色本命进化武器开局，最长 45 分钟）
 'use strict';
 const { chromium } = require('playwright');
 const path = require('path');
@@ -8,6 +9,8 @@ const path = require('path');
 const URL = 'file://' + path.resolve(__dirname, '..', 'index.html');
 const RUNS = +(process.argv[2] || 1);
 const META = process.argv[3] === '1';
+const ENDLESS = process.argv[4] === 'endless';
+const LIMIT = ENDLESS ? 45 * 60 : 16.5 * 60;
 const MATRIX = [
   ['knight', 'graveyard'], ['mage', 'graveyard'], ['priest', 'graveyard'], ['rogue', 'graveyard'],
   ['woodcutter', 'forest'], ['nun', 'forest'], ['alchemist', 'forest'],
@@ -26,16 +29,18 @@ const MATRIX = [
   const summary = [];
   for (const [ch, st] of MATRIX) {
     for (let r = 0; r < RUNS; r++) {
-      const res = await page.evaluate(([ch, st, meta]) => {
+      const res = await page.evaluate(([ch, st, meta, endless, limit]) => {
         if (meta) for (const id in PS.DATA.meta) PS.save.data.meta[id] = PS.DATA.meta[id].max;
         else PS.save.data.meta = {};
         PS.debug.bot = true;
-        const g = PS.app.startRun(ch, st);
+        const ult = PS.DATA.weapons[PS.DATA.chars[ch].weapon].evo.into;
+        const g = PS.app.startRun(ch, st, endless ? { endless: true, ultimate: ult } : undefined);
         const bad = [];
         const fin = (v) => typeof v === 'number' && isFinite(v);
         const t0 = performance.now();
         let maxEn = 0, maxProj = 0, minHpPct = 1, lvAt5 = 0, lvAt10 = 0;
-        while (g.time < 16.5 * 60) {
+        let maxWl = 0;
+        while (g.time < limit) {
           const alive = PS.debug.simulate(5);
           maxEn = Math.max(maxEn, g.enemies.length);
           maxProj = Math.max(maxProj, g.projs.length);
@@ -50,24 +55,27 @@ const MATRIX = [
           if (g.projs.length > 3000) bad.push('投射物数量失控 ' + g.projs.length);
           if (g.pickups.filter((p) => p.type === 'gem').length > PS.CONST.MAX_GEMS + 2) bad.push('宝石数量超过上限');
           if (g.weapons.length > 6 || g.passives.length > 6) bad.push('槽位溢出');
-          if (g.weapons.some((w) => !w.def.evolved && w.level > w.def.maxLevel)) bad.push('武器等级溢出');
-          if (g.passives.some((p) => p.level > p.def.max)) bad.push('道具等级溢出');
+          if (!endless && g.weapons.some((w) => !w.def.evolved && w.level > w.def.maxLevel)) bad.push('武器等级溢出');
+          if (!endless && g.passives.some((p) => p.level > p.def.max)) bad.push('道具等级溢出');
+          if (g.weapons.some((w) => !isFinite(w.st.dmg) || !(w.st.cd > 0))) bad.push('武器数值非法');
+          maxWl = Math.max(maxWl, ...g.weapons.map((w) => w.level));
+          if (endless && g.victory) bad.push('无尽模式不应胜利结束');
           if (PS.app.errors.length) bad.push('运行时错误 ' + PS.app.errors[0]);
           if (bad.length || !alive) break;
         }
         const out = {
           ch, st, t: Math.round(g.time), victory: g.victory, lv: g.level, lvAt5, lvAt10, kills: g.kills, gold: Math.round(g.gold),
           evos: g.run.evolutions, bosses: g.run.bossKills, maxEn, maxProj, minHpLate: g.time > 600 ? Math.round(minHpPct * 100) + '%' : '-',
-          wallMs: Math.round(performance.now() - t0), bad: bad.slice(0, 3),
+          wallMs: Math.round(performance.now() - t0), bad: bad.slice(0, 3), maxWl, cycle: g.cycle,
           weapons: g.weapons.map((w) => (w.def.evolved ? '★' : '') + w.def.name + ':' + Math.round(w.dmg / 1000) + 'k').join(' '),
         };
         if (PS.app.state === 'over') PS.app.toMenu();
         else { PS.app.gameOver({ quit: true }); PS.app.toMenu(); }
         return out;
-      }, [ch, st, META]);
+      }, [ch, st, META, ENDLESS, LIMIT]);
       if (res.bad.length) failures++;
       summary.push(res);
-      console.log(`${res.bad.length ? '✗' : '✓'} ${ch}@${st} ${res.victory ? '胜利' : res.t >= 16.5 * 60 ? '超时' : '倒下'} ${Math.floor(res.t / 60)}:${String(res.t % 60).padStart(2, '0')} Lv${res.lv} (5分:Lv${res.lvAt5} 10分:Lv${res.lvAt10}) 击杀${res.kills} 进化${res.evos} Boss${res.bosses} 金币${res.gold} 最多敌人${res.maxEn} 最多投射物${res.maxProj} 后期最低血量${res.minHpLate} 用时${res.wallMs}ms ${res.bad.join(';')}`);
+      console.log(`${res.bad.length ? '✗' : '✓'} ${ch}@${st} ${res.victory ? '胜利' : res.t >= LIMIT ? '超时' : '倒下'}${ENDLESS ? ' 第' + (res.cycle + 1) + '轮 武器最高Lv' + res.maxWl : ''} ${Math.floor(res.t / 60)}:${String(res.t % 60).padStart(2, '0')} Lv${res.lv} (5分:Lv${res.lvAt5} 10分:Lv${res.lvAt10}) 击杀${res.kills} 进化${res.evos} Boss${res.bosses} 金币${res.gold} 最多敌人${res.maxEn} 最多投射物${res.maxProj} 后期最低血量${res.minHpLate} 用时${res.wallMs}ms ${res.bad.join(';')}`);
       console.log('    ' + res.weapons);
     }
   }

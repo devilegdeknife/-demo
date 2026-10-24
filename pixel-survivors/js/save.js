@@ -15,9 +15,9 @@
       chars: ['knight', 'mage'],
       stages: ['graveyard'],
       seen: { weapons: {}, passives: {}, enemies: {} },
-      stats: { runs: 0, totalKills: 0, maxLevel: 0, bestTime: {}, bossKills: 0, chests: 0, evolutions: 0, totalGold: 0, wins: 0, bestKills: 0 },
+      stats: { runs: 0, totalKills: 0, maxLevel: 0, bestTime: {}, bossKills: 0, chests: 0, evolutions: 0, totalGold: 0, wins: 0, bestKills: 0, endlessBest: {} },
       settings: { music: 0.5, sfx: 0.7, shake: true, dmgNums: true, mouseMove: true },
-      last: { char: 'knight', stage: 'graveyard' },
+      last: { char: 'knight', stage: 'graveyard', ult: '' },
     };
   };
 
@@ -109,7 +109,8 @@
       totalKills: st.totalKills, maxLevel: st.maxLevel, bestTime: Object.assign({}, st.bestTime),
       bossKills: st.bossKills, chests: st.chests, evolutions: st.evolutions, totalGold: st.totalGold, wins: st.wins,
     };
-    if (game && !game.committed) {
+    // 无尽模式的成绩不计入普通模式的解锁条件
+    if (game && !game.committed && !game.endless) {
       live.totalKills += game.kills;
       live.maxLevel = Math.max(live.maxLevel, game.level);
       live.bestTime[game.stageId] = Math.max(live.bestTime[game.stageId] || 0, game.time);
@@ -164,6 +165,18 @@
   // 一局结束：写入统计与金币
   S.commitRun = function (game) {
     if (game.committed) return [];
+    if (game.endless) {
+      // 无尽模式：只记录金币、局数与该关卡的无尽最佳时间
+      const st = S.data.stats;
+      const gold = Math.floor(game.gold);
+      st.runs++;
+      st.endlessBest[game.stageId] = Math.max(st.endlessBest[game.stageId] || 0, Math.floor(game.time));
+      S.data.gold += gold;
+      S.data.last = { char: game.charId, stage: game.stageId, ult: game.opts.ultimate || '' };
+      game.committed = true;
+      S.store();
+      return [];
+    }
     const unlocks = S.checkUnlocks(game);
     const st = S.data.stats;
     st.runs++;
@@ -178,7 +191,7 @@
     st.totalGold += gold;
     if (game.victory) st.wins++;
     S.data.gold += gold;
-    S.data.last = { char: game.charId, stage: game.stageId };
+    S.data.last = Object.assign({}, S.data.last, { char: game.charId, stage: game.stageId });
     game.committed = true;
     S.store();
     return unlocks;

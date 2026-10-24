@@ -545,6 +545,22 @@
   for (const id in D.meta) D.meta[id].id = id;
   D.metaOrder = Object.keys(D.meta);
 
+  // 无尽模式：武器突破满级后每级的成长
+  D.OVER = { dmg: 0.15, cd: 0.025, cdMin: 0.55, area: 0.03, areaMax: 0.6, amountEvery: 4, amountMax: 8, pierceEvery: 3 };
+  D.overflowText = (def, ex) => {
+    const O = D.OVER, parts = ['伤害 +' + Math.round(O.dmg * 100) + '%'];
+    if (1 - O.cd * ex >= O.cdMin) parts.push('冷却 -' + (O.cd * 100) + '%');
+    if (O.area * ex <= O.areaMax) parts.push('范围 +' + Math.round(O.area * 100) + '%');
+    if (ex % O.amountEvery === 0 && ex / O.amountEvery <= O.amountMax) parts.push('数量 +1');
+    if (ex % O.pierceEvery === 0 && def.base.pierce < 999) parts.push('穿透 +1');
+    return '突破强化：' + parts.join('，');
+  };
+  D.passiveOverflowText = (def) => {
+    if (def.stat === 'amount') return '突破强化：每 3 级投射物数量 +1';
+    const st = D.STAT[def.stat];
+    return '突破强化：' + st.name + ' ' + st.fmt(+(def.per * 0.5).toFixed(3));
+  };
+
   // 经验需求曲线
   D.xpReq = (lv) => {
     if (lv < 20) return 5 + (lv - 1) * 10;

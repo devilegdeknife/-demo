@@ -26,8 +26,8 @@
     requestAnimationFrame(app.frame);
   };
 
-  app.startRun = function (charId, stageId) {
-    const g = new PS.Game(charId, stageId);
+  app.startRun = function (charId, stageId, opts) {
+    const g = new PS.Game(charId, stageId, opts);
     app.game = g;
     PS.render.prepare(g);
     g.on('chest', (res) => app.openChest(res));
@@ -44,7 +44,7 @@
     app.state = 'play';
     app.acc = 0;
     PS.audio.music(g.st.music);
-    PS.save.data.last = { char: charId, stage: stageId };
+    PS.save.data.last = Object.assign({}, PS.save.data.last, { char: charId, stage: stageId }, g.endless ? { ult: g.opts.ultimate } : {});
     PS.save.store();
     return g;
   };
@@ -148,9 +148,10 @@
   app.gameOver = function (d) {
     const g = app.game;
     if (!g || app.state === 'over') return;
+    const prevBest = g.endless ? PS.save.data.stats.endlessBest[g.stageId] || 0 : 0;
     const unlocks = PS.save.commitRun(g);
     app.state = 'over';
-    PS.ui.show('over', { victory: !!d.victory, quit: !!d.quit, unlocks: g.unlocks.concat(unlocks) });
+    PS.ui.show('over', { victory: !!d.victory, quit: !!d.quit, unlocks: g.unlocks.concat(unlocks), record: g.endless && Math.floor(g.time) > prevBest });
     PS.audio.music(d.victory ? 'title' : 'over');
   };
   app.quitRun = function () {
@@ -169,7 +170,7 @@
   };
   app.retry = function () {
     const g = app.game;
-    app.startRun(g.charId, g.stageId);
+    app.startRun(g.charId, g.stageId, g.opts);
   };
 
   // ---------- 调试 / 自动化测试 ----------
