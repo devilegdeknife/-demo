@@ -205,7 +205,8 @@
     const sig = g.weapons.map((w) => w.id + w.level).join(',') + '|' + g.passives.map((p) => p.id + p.level).join(',');
     if (sig !== UI.hudSig) {
       UI.hudSig = sig;
-      const slot = (icon, lv, max, evo) => `<div class="slot ${evo ? 'evo' : ''}">${img(icon, 2)}<span class="slv">${evo ? '★' : lv >= max ? 'M' : lv}</span></div>`;
+      // 无尽模式显示真实等级（可突破满级）
+      const slot = (icon, lv, max, evo) => `<div class="slot ${evo ? 'evo' : ''}">${img(icon, 2)}<span class="slv">${g.endless ? lv : evo ? '★' : lv >= max ? 'M' : lv}</span></div>`;
       let ws = '', ps = '';
       for (let i = 0; i < 6; i++) {
         const w = g.weapons[i];
@@ -227,6 +228,10 @@
   // ================= 屏幕定义 =================
   const SCREENS = {};
   UI.SCREENS = SCREENS;
+  // 无尽模式下所有角色与关卡都可用
+  const isEndless = () => UI.mode === 'endless';
+  const charOpen = (id) => isEndless() || PS.save.data.chars.includes(id);
+  const stageOpen = (id) => isEndless() || PS.save.data.stages.includes(id);
   const goldLine = () => `<div class="goldline">${img('coin', 3)}<span>${U.fmtNum(PS.save.data.gold)}</span></div>`;
 
   // ---------- 标题 ----------
@@ -241,6 +246,7 @@
         </div>
         <div class="menu col">
           <button class="btn big" data-nav data-act="start" data-default>开始游戏</button>
+          <button class="btn endless" data-nav data-act="endless">无尽模式</button>
           <button class="btn" data-nav data-act="shop">强化商店</button>
           <button class="btn" data-nav data-act="collection">收藏图鉴</button>
           <button class="btn" data-nav data-act="settings">设置</button>
@@ -254,8 +260,10 @@
       </div>`;
     },
     onAct(a) {
-      if (a === 'start') UI.show('chars');
-      else if (a === 'shop') UI.show('shop');
+      if (a === 'start' || a === 'endless') {
+        UI.mode = a === 'endless' ? 'endless' : 'normal';
+        UI.show('chars');
+      } else if (a === 'shop') UI.show('shop');
       else if (a === 'collection') UI.show('collection', { tab: 'weapons' });
       else if (a === 'settings') UI.show('settings', { from: 'title' });
     },
@@ -281,23 +289,23 @@
   SCREENS.chars = {
     render() {
       const save = PS.save.data;
-      if (!UI.selChar || !save.chars.includes(UI.selChar)) UI.selChar = save.chars.includes(save.last.char) ? save.last.char : 'knight';
+      if (!UI.selChar || !charOpen(UI.selChar)) UI.selChar = charOpen(save.last.char) ? save.last.char : 'knight';
       const cards = D.charOrder.map((id) => {
         const c = D.chars[id];
-        const un = save.chars.includes(id);
+        const un = charOpen(id);
         const pic = un ? img('ch_' + id, 4) : `<img class="px" src="${PS.silhouetteURL('ch_' + id, 4)}" alt="">`;
         return `<div class="card char ${un ? '' : 'locked'}" data-nav data-act="pick" data-id="${id}" data-key="${id}" ${id === UI.selChar ? 'data-default' : ''}>
           ${pic}<div class="nm">${un ? esc(c.name) : '???'}</div>${un ? `<div class="wpn">${img(D.weapons[c.weapon].icon, 2)}</div>` : '<div class="lock">🔒</div>'}</div>`;
       }).join('');
       return `<div class="screen chars">
-        <div class="hdr"><div class="ttl">选择角色</div>${goldLine()}</div>
+        <div class="hdr"><div class="ttl">选择角色${isEndless() ? '<span class="modetag">无尽模式</span>' : ''}</div>${goldLine()}</div>
         <div class="split">
           <div class="grid chargrid">${cards}</div>
           <div class="panel detail" id="detail"></div>
         </div>
         <div class="row btns">
           <button class="btn" data-nav data-act="back">返回</button>
-          <button class="btn primary" data-nav data-act="go">选择角色 ▶</button>
+          <button class="btn primary" data-nav data-act="go">${isEndless() ? '下一步：终极武器 ▶' : '选择角色 ▶'}</button>
         </div>
       </div>`;
     },
@@ -312,7 +320,7 @@
     },
     detail(id) {
       const c = D.chars[id];
-      const un = PS.save.data.chars.includes(id);
+      const un = charOpen(id);
       const det = $('#detail');
       if (!det) return;
       if (!un) {
@@ -325,17 +333,18 @@
         <div class="ddesc">${esc(c.desc)}</div>
         <div class="lbl">初始武器</div>
         <div class="witem">${img(w.icon, 3)}<div><div class="wn">${esc(w.name)}</div><div class="wd">${esc(w.desc)}</div></div></div>
-        <div class="lbl">角色加成</div><div class="bonus">${esc(D.bonusText(c.bonus))}</div>`;
+        <div class="lbl">角色加成</div><div class="bonus">${esc(D.bonusText(c.bonus))}</div>
+        ${isEndless() && !PS.save.data.chars.includes(id) ? '<div class="hint">普通模式中尚未解锁，无尽模式可直接使用。</div>' : ''}`;
     },
     onAct(a, el) {
       if (a === 'back') return UI.show('title');
       let id = a === 'pick' ? el.dataset.id : UI.focusChar || UI.selChar;
-      if (!PS.save.data.chars.includes(id)) {
+      if (!charOpen(id)) {
         sfx('deny');
         return;
       }
       UI.selChar = id;
-      UI.show('stages');
+      UI.show(isEndless() ? 'ultimate' : 'stages');
     },
     onBack() { UI.show('title'); },
   };
@@ -345,39 +354,95 @@
   SCREENS.stages = {
     render() {
       const save = PS.save.data;
-      if (!UI.selStage || !save.stages.includes(UI.selStage)) UI.selStage = save.stages.includes(save.last.stage) ? save.last.stage : 'graveyard';
+      if (!UI.selStage || !stageOpen(UI.selStage)) UI.selStage = stageOpen(save.last.stage) ? save.last.stage : 'graveyard';
+      const endless = isEndless();
       const cards = D.stageOrder.map((id) => {
         const s = D.stages[id];
-        const un = save.stages.includes(id);
-        const best = save.stats.bestTime[id] || 0;
-        const won = best >= D.RUN_LENGTH;
+        const un = stageOpen(id);
+        const best = (endless ? save.stats.endlessBest[id] : save.stats.bestTime[id]) || 0;
+        const won = !endless && best >= D.RUN_LENGTH;
         return `<div class="card stage ${un ? '' : 'locked'} theme-${s.theme}" data-nav data-act="pick" data-id="${id}" ${id === UI.selStage ? 'data-default' : ''}>
           <div class="sicon">${un ? img(STAGE_ICON[id], 2) : `<img class="px" src="${PS.silhouetteURL(STAGE_ICON[id], 2)}" alt="">`}</div>
           <div class="sinfo">
             <div class="sname">${un ? esc(s.name) : '??? 未解锁'}</div>
             <div class="sdesc">${un ? esc(s.desc) : '解锁条件：' + esc(s.unlock.txt) + '（' + unlockProgress(s.unlock) + '）'}</div>
-            ${un ? `<div class="smeta">最佳：${U.fmtTime(best)} ${won ? '<span class="won">★ 已通关</span>' : ''} · 敌人强度 ×${s.hpMul} · 金币 ×${s.goldMul}</div>` : ''}
+            ${un ? `<div class="smeta">${endless ? '无尽最佳' : '最佳'}：${U.fmtTime(best)} ${won ? '<span class="won">★ 已通关</span>' : ''} · 敌人强度 ×${s.hpMul} · 金币 ×${s.goldMul}</div>` : ''}
           </div></div>`;
       }).join('');
       const c = D.chars[UI.selChar];
+      const ult = endless && D.weapons[UI.selUlt];
       return `<div class="screen stages">
-        <div class="hdr"><div class="ttl">选择关卡</div><div class="selchar">${img('ch_' + UI.selChar, 3)}<span>${esc(c.name)}</span></div></div>
+        <div class="hdr"><div class="ttl">选择关卡${endless ? '<span class="modetag">无尽模式</span>' : ''}</div>
+          <div class="selchar">${img('ch_' + UI.selChar, 3)}<span>${esc(c.name)}</span>${ult ? img(ult.icon, 2) + '<span>' + esc(ult.name) + '</span>' : ''}</div></div>
         <div class="col stagelist">${cards}</div>
-        <div class="tip">存活 15:00 后最终 Boss 现身，击败它即可通关！</div>
+        <div class="tip">${endless ? '无尽模式：没有时间限制，武器与道具可无限升级；每 15 分钟进入下一轮，Boss 会更强。' : '存活 15:00 后最终 Boss 现身，击败它即可通关！'}</div>
         <div class="row btns">
           <button class="btn" data-nav data-act="back">返回</button>
         </div>
       </div>`;
     },
     onAct(a, el) {
-      if (a === 'back') return UI.show('chars');
+      if (a === 'back') return this.onBack();
       const id = el.dataset.id;
-      if (!PS.save.data.stages.includes(id)) {
+      if (!stageOpen(id)) {
         sfx('deny');
         return;
       }
       UI.selStage = id;
-      PS.app.startRun(UI.selChar, id);
+      PS.app.startRun(UI.selChar, id, isEndless() ? { endless: true, ultimate: UI.selUlt } : undefined);
+    },
+    onBack() { UI.show(isEndless() ? 'ultimate' : 'chars'); },
+  };
+
+  // ---------- 无尽模式：选择终极武器 ----------
+  const ULTS = D.baseWeapons.map((id) => D.weapons[id].evo.into);
+  SCREENS.ultimate = {
+    render() {
+      const own = D.weapons[D.chars[UI.selChar].weapon].evo.into;
+      if (!ULTS.includes(UI.selUlt)) UI.selUlt = ULTS.includes(PS.save.data.last.ult) ? PS.save.data.last.ult : own;
+      const cards = ULTS.map((id) => {
+        const w = D.weapons[id];
+        return `<div class="card ult" data-nav data-act="pick" data-id="${id}" data-key="${id}" ${id === UI.selUlt ? 'data-default' : ''}>
+          ${img(w.icon, 3)}<div class="nm">${esc(w.name)}</div>${id === own ? '<div class="own">本命</div>' : ''}</div>`;
+      }).join('');
+      return `<div class="screen ultimate">
+        <div class="hdr"><div class="ttl">选择终极武器<span class="modetag">无尽模式</span></div><div class="selchar">${img('ch_' + UI.selChar, 3)}<span>${esc(D.chars[UI.selChar].name)}</span></div></div>
+        <div class="split">
+          <div class="grid ultgrid">${cards}</div>
+          <div class="panel detail" id="detail"></div>
+        </div>
+        <div class="row btns">
+          <button class="btn" data-nav data-act="back">返回</button>
+          <button class="btn primary" data-nav data-act="go">下一步：选择关卡 ▶</button>
+        </div>
+      </div>`;
+    },
+    onShow() { this.detail(UI.selUlt); },
+    onFocus(el) {
+      if (el.dataset.id) {
+        UI.focusUlt = el.dataset.id;
+        this.detail(el.dataset.id);
+      }
+    },
+    detail(id) {
+      const w = D.weapons[id];
+      const base = D.weapons[w.from];
+      const pas = D.passives[base.evo.with];
+      const det = $('#detail');
+      if (!det) return;
+      const same = w.from === D.chars[UI.selChar].weapon;
+      det.innerHTML = `<div class="dhead">${img(w.icon, 5, 'big')}<div><div class="dname">${esc(w.name)}</div><div class="dsub">终极武器</div></div></div>
+        <div class="ddesc">${esc(w.desc)}</div>
+        <div class="lbl">进化来源</div>
+        <div class="recipe">${img(base.icon, 3)}<span>＋</span>${img(pas.icon, 3)}<span>${esc(base.name)} ＋ ${esc(pas.name)}</span></div>
+        <div class="hint">${same ? '与角色初始武器同系：开局直接替换为这把终极武器。' : '开局同时拥有角色初始武器和这把终极武器。'}无尽模式中武器可以无限升级。</div>`;
+    },
+    onAct(a, el) {
+      if (a === 'back') return this.onBack();
+      const id = a === 'pick' ? el.dataset.id : UI.focusUlt || UI.selUlt;
+      if (!ULTS.includes(id)) return;
+      UI.selUlt = id;
+      UI.show('stages');
     },
     onBack() { UI.show('chars'); },
   };
@@ -740,7 +805,7 @@
     return rows.map(([k, v]) => `<div class="st"><span>${k}</span><b>${v}</b></div>`).join('');
   }
   function buildList(g) {
-    const ws = g.weapons.map((w) => `<div class="bitem ${w.def.evolved ? 'evo' : ''}">${img(w.def.icon, 2)}<span>${esc(w.def.name)}</span><b>${w.def.evolved ? '★' : 'Lv.' + w.level}</b></div>`).join('');
+    const ws = g.weapons.map((w) => `<div class="bitem ${w.def.evolved ? 'evo' : ''}">${img(w.def.icon, 2)}<span>${esc(w.def.name)}</span><b>${w.def.evolved && !g.endless ? '★' : 'Lv.' + w.level}</b></div>`).join('');
     const ps = g.passives.map((p) => `<div class="bitem">${img(p.def.icon, 2)}<span>${esc(p.def.name)}</span><b>Lv.${p.level}</b></div>`).join('');
     return `<div class="lbl">武器</div><div class="blist">${ws || '-'}</div><div class="lbl">道具</div><div class="blist">${ps || '-'}</div>`;
   }
@@ -784,12 +849,14 @@
       const g = PS.app.game;
       const rows = g.weapons.slice().sort((a, b) => b.dmg - a.dmg).map((w) => {
         const t = Math.max(1, g.time - w.t0);
-        return `<tr><td>${img(w.def.icon, 2)}</td><td>${esc(w.def.name)}</td><td>${w.def.evolved ? '★' : w.level}</td><td>${U.fmtNum(w.dmg)}</td><td>${U.fmtNum(w.dmg / t)}</td><td>${U.fmtNum(w.kills)}</td></tr>`;
+        return `<tr><td>${img(w.def.icon, 2)}</td><td>${esc(w.def.name)}</td><td>${w.def.evolved && !g.endless ? '★' : w.level}</td><td>${U.fmtNum(w.dmg)}</td><td>${U.fmtNum(w.dmg / t)}</td><td>${U.fmtNum(w.kills)}</td></tr>`;
       }).join('');
       const unl = (p.unlocks || []).map((u) => `<div class="unl">${u.kind === 'char' ? img('ch_' + u.id, 3) : img(STAGE_ICON[u.id], 1)}<span>解锁${u.kind === 'char' ? '角色' : '关卡'}：${esc(u.name)}</span></div>`).join('');
-      const title = p.victory ? '胜 利 ！' : p.quit ? '已放弃' : '你倒下了…';
+      const title = g.endless ? '无尽之旅结束' : p.victory ? '胜 利 ！' : p.quit ? '已放弃' : '你倒下了…';
+      const record = g.endless ? `<div class="record">${p.record ? '★ 新纪录！' : '无尽最佳'} ${U.fmtTime(PS.save.data.stats.endlessBest[g.stageId] || 0)} · ${esc(D.stages[g.stageId].name)} · 第 ${g.cycle + 1} 轮</div>` : '';
       return `<div class="panel overpanel ${p.victory ? 'victory' : ''}">
         <div class="ttl big">${title}</div>
+        ${record}
         <div class="row summary">
           <div class="sm"><span>存活</span><b>${U.fmtTime(g.time)}</b></div>
           <div class="sm"><span>等级</span><b>${g.level}</b></div>

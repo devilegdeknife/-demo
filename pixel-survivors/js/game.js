@@ -24,7 +24,11 @@
   const OBS = { tomb: 6, tomb2: 5, deadtree: 4, pine: 6, bush: 6, rock: 6, pillar: 7, lavarock: 6, bones: 0 };
 
   class Game {
-    constructor(charId, stageId) {
+    // opts.endless：无尽模式；opts.ultimate：开局自选的进化武器
+    constructor(charId, stageId, opts) {
+      opts = opts || {};
+      this.opts = opts;
+      this.endless = !!opts.endless;
       this.charId = charId;
       this.stageId = stageId;
       this.ch = D.chars[charId];
@@ -59,6 +63,10 @@
       this.spawnT = 0;
       this.evIdx = 0;
       this.events = this.st.events.slice().sort((a, b) => a.t - b.t);
+      // 无尽模式：最终 Boss 不结束对局，每 15 分钟进入更强的下一轮
+      if (this.endless) this.events = this.events.map((e) => Object.assign({}, e, { final: false }));
+      this.baseEvents = this.events.slice();
+      this.cycle = 0;
       this.run = { bossKills: 0, chests: 0, evolutions: 0 };
       this.unlocks = [];
       this.unlockT = 1;
@@ -88,6 +96,12 @@
       this.P.revivals = this.P.st.revival;
       this.genMap();
       this.addWeapon(this.ch.weapon);
+      const ult = this.endless && D.weapons[opts.ultimate];
+      if (ult && ult.evolved) {
+        // 终极武器与初始武器同源时直接替换，避免同一系武器出现两把
+        if (ult.from === this.ch.weapon) this.weapons.length = 0;
+        this.addWeapon(ult.id);
+      }
       this.updateCam();
     }
 
@@ -162,9 +176,14 @@
       for (const k in this.ch.bonus) add(k, this.ch.bonus[k]);
       const ms = PS.save.metaStats();
       for (const k in ms) add(k, ms[k]);
-      for (const p of this.passives) add(p.def.stat, p.def.per * p.level);
+      for (const p of this.passives) {
+        const base = Math.min(p.level, p.def.max), ex = p.level - base;
+        add(p.def.stat, p.def.per * base);
+        // 无尽模式突破满级：效果减半；复制之戒每 3 级 +1 数量
+        if (ex > 0) add(p.def.stat, p.def.stat === 'amount' ? Math.floor(ex / 3) : p.def.per * 0.5 * ex);
+      }
       s.cooldown = Math.max(0.4, s.cooldown);
-      s.move = Math.max(0.5, s.move);
+      s.move = U.clamp(s.move, 0.5, 2.5);
       const P = this.P;
       const oldMax = P.maxHp || 0;
       P.st = s;
@@ -189,9 +208,28 @@
         const lv = w.def.levels[i];
         for (const k in lv) st[k] = (st[k] || 0) + lv[k];
       }
+      if (this.endless && w.level > w.def.maxLevel) {
+        // 无尽模式突破满级成长
+        const ex = w.level - w.def.maxLevel, O = D.OVER;
+        st.dmg *= 1 + O.dmg * ex;
+        st.cd *= Math.max(O.cdMin, 1 - O.cd * ex);
+        st.area += Math.min(O.areaMax, O.area * ex);
+        st.amount += Math.min(O.amountMax, Math.floor(ex / O.amountEvery));
+        if (st.pierce < 999) st.pierce += Math.floor(ex / O.pierceEvery);
+      }
       st.cd = Math.max(0.05, st.cd);
       if (st.hitDelay) st.hitDelay = Math.max(0.15, st.hitDelay);
       w.st = st;
+    }
+    canUpWeapon(w) { return this.endless || (!w.def.evolved && w.level < w.def.maxLevel); }
+    canUpPassive(p) { return this.endless || p.level < p.def.max; }
+    // 下一级的升级说明
+    weaponUpText(w) {
+      if (w.level < w.def.maxLevel) return D.levelText(w.def.levels[w.level - 1]);
+      return D.overflowText(w.def, w.level + 1 - w.def.maxLevel);
+    }
+    passiveUpText(p) {
+      return p.level < p.def.max ? p.def.desc : D.passiveOverflowText(p.def);
     }
     addPassive(id) {
       const def = D.passives[id];
@@ -221,6 +259,8 @@
     }
     evolve(w) {
       const nd = D.weapons[w.def.evo.into];
+      // 无尽模式：超出满级的等级保留到进化武器上
+      if (this.endless) w.level = 1 + Math.max(0, w.level - w.def.maxLevel);
       w.id = nd.id;
       w.def = nd;
       w.queue.length = 0;
@@ -236,9 +276,16 @@
     rollOptions() {
       let pool = [];
       const ownedBase = new Set(this.weapons.map((w) => w.baseId));
-      for (const w of this.weapons) if (!w.def.evolved && w.level < w.def.maxLevel) pool.push({ kind: 'wup', id: w.id, wt: 120 });
-      for (const p of this.passives) if (p.level < p.def.max) pool.push({ kind: 'pup', id: p.id, wt: 100 });
-      if (this.weapons.length < 6) for (const id of D.baseWeapons) if (!ownedBase.has(id)) pool.push({ kind: 'wnew', id, wt: 90 });
+      for (const w of this.weapons) if (this.canUpWeapon(w)) pool.push({ kind: 'wup', id: w.id, wt: 120 });
+      for (const p of this.passives) if (this.canUpPassive(p)) pool.push({ kind: 'pup', id: p.id, wt: 100 });
+      if (this.weapons.length < 6) {
+        // 无尽模式：进化武器也可以直接作为新武器获得（同一系只能拥有一把）
+        const ids = this.endless ? Object.keys(D.weapons) : D.baseWeapons;
+        for (const id of ids) {
+          const def = D.weapons[id];
+          if (!ownedBase.has(def.from || id)) pool.push({ kind: 'wnew', id, wt: def.evolved ? 40 : 90, line: def.from || id });
+        }
+      }
       if (this.passives.length < 6) for (const id in D.passives) if (!this.hasPassive(id)) pool.push({ kind: 'pnew', id, wt: 75 });
       pool = pool.filter((o) => !this.banished.has(o.id));
       let n = 3;
@@ -247,7 +294,7 @@
       while (out.length < n && pool.length) {
         const o = U.weighted(pool, (x) => x.wt);
         out.push(o);
-        pool.splice(pool.indexOf(o), 1);
+        pool = pool.filter((x) => x !== o && !(o.line && x.line === o.line));
       }
       if (!out.length) out.push({ kind: 'gold', v: 25 }, { kind: 'chicken', v: 30 });
       return out;
@@ -258,14 +305,14 @@
         const def = D.weapons[o.id];
         const w = this.getWeapon(o.id);
         const lv = w ? w.level : 0;
-        const desc = w ? D.levelText(def.levels[lv - 1]) : def.desc;
+        const desc = w ? this.weaponUpText(w) : def.desc;
         const evo = def.evo ? D.passives[def.evo.with].name + ' → ' + D.weapons[def.evo.into].name : '';
-        return { icon: def.icon, name: def.name, tag: w ? 'Lv.' + (lv + 1) : '新！', desc, kind: '武器', evo, isNew: !w };
+        return { icon: def.icon, name: def.name, tag: w ? 'Lv.' + (lv + 1) : '新！', desc, kind: def.evolved ? '终极武器' : '武器', evo, isNew: !w };
       }
       if (o.kind === 'pup' || o.kind === 'pnew') {
         const def = D.passives[o.id];
         const p = this.getPassive(o.id);
-        return { icon: def.icon, name: def.name, tag: p ? 'Lv.' + (p.level + 1) : '新！', desc: def.desc, kind: '道具', isNew: !p };
+        return { icon: def.icon, name: def.name, tag: p ? 'Lv.' + (p.level + 1) : '新！', desc: p ? this.passiveUpText(p) : def.desc, kind: '道具', isNew: !p };
       }
       if (o.kind === 'gold') return { icon: 'bag', name: '金币袋', tag: '', desc: '获得 ' + o.v + ' 金币。', kind: '奖励' };
       return { icon: 'chicken', name: '烤鸡', tag: '', desc: '回复 ' + o.v + ' 点生命。', kind: '奖励' };
@@ -311,18 +358,20 @@
           continue;
         }
         const cands = [];
-        for (const w of this.weapons) if (!w.def.evolved && w.level < w.def.maxLevel) cands.push({ w });
-        for (const p of this.passives) if (p.level < p.def.max) cands.push({ p });
+        for (const w of this.weapons) if (this.canUpWeapon(w)) cands.push({ w });
+        for (const p of this.passives) if (this.canUpPassive(p)) cands.push({ p });
         if (cands.length) {
           const c = U.pick(cands);
           if (c.w) {
+            const desc = this.weaponUpText(c.w);
             c.w.level++;
             this.recalcWeapon(c.w);
-            items.push({ icon: c.w.def.icon, name: c.w.def.name, tag: 'Lv.' + c.w.level, desc: D.levelText(c.w.def.levels[c.w.level - 2]) });
+            items.push({ icon: c.w.def.icon, name: c.w.def.name, tag: 'Lv.' + c.w.level, desc });
           } else {
+            const desc = this.passiveUpText(c.p);
             c.p.level++;
             this.recalcStats();
-            items.push({ icon: c.p.def.icon, name: c.p.def.name, tag: 'Lv.' + c.p.level, desc: c.p.def.desc });
+            items.push({ icon: c.p.def.icon, name: c.p.def.name, tag: 'Lv.' + c.p.level, desc });
           }
         } else {
           const g = 30;
@@ -431,6 +480,15 @@
         this.runEvent(this.events[this.evIdx]);
         this.evIdx++;
       }
+      if (this.endless && this.evIdx >= this.events.length) this.nextCycle();
+    }
+
+    // 无尽模式：把本关的事件表整体顺延 15 分钟，Boss 生命按轮次提高
+    nextCycle() {
+      this.cycle++;
+      const off = D.RUN_LENGTH * this.cycle, mul = 1 + 0.75 * this.cycle;
+      for (const e of this.baseEvents) this.events.push(Object.assign({}, e, { t: e.t + off, mul: (e.mul || 1) * mul }));
+      this.emit('toast', { text: '无尽轮回 第 ' + (this.cycle + 1) + ' 轮：Boss 将更加强大！', cls: 'warn' });
     }
 
     runEvent(ev) {
@@ -521,7 +579,7 @@
       this.updateFx(dt);
       this.cleanup();
       this.unlockT -= dt;
-      if (this.unlockT <= 0) {
+      if (this.unlockT <= 0 && !this.endless) {
         this.unlockT = 1;
         const nu = PS.save.checkUnlocks(this);
         for (const u of nu) {

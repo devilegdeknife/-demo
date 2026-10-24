@@ -8,7 +8,8 @@
     "test": "node tests/ui.test.js && node tests/sim.test.js 1",
     "test:ui": "node tests/ui.test.js",
     "test:sim": "node tests/sim.test.js 1",
-    "test:sim:meta": "node tests/sim.test.js 1 1"
+    "test:sim:meta": "node tests/sim.test.js 1 1",
+    "test:sim:endless": "node tests/sim.test.js 1 0 endless"
   },
   "devDependencies": {
     "playwright": "^1.56.1"

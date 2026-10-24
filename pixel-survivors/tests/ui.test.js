@@ -71,6 +71,8 @@ async function step(name, fn) {
 
   await step('键盘导航：方向键移动焦点，ESC 返回', async () => {
     await page.keyboard.press('ArrowDown');
+    assert.strictEqual(await focusAct(), 'endless');
+    await page.keyboard.press('KeyS');
     assert.strictEqual(await focusAct(), 'shop');
     await page.keyboard.press('KeyS');
     assert.strictEqual(await focusAct(), 'collection');
@@ -450,6 +452,120 @@ async function step(name, fn) {
     await page.evaluate(() => { window.__pad.buttons[7] = { pressed: false, touched: false, value: 0 }; window.__padOn = false; });
     await wait(page, 50);
     assert.ok((await page.evaluate(() => PS.app.game.P.sta)) < 80, 'RT 应当消耗体力冲刺');
+  });
+
+  await step('无尽模式：全部角色与关卡可选，开局自选终极武器', async () => {
+    await page.evaluate(() => { if (PS.app.game) { PS.app.gameOver({ quit: true }); } PS.app.toMenu(); });
+    await page.evaluate(() => PS.ui.focus(document.querySelector('[data-act="endless"]')));
+    await page.keyboard.press('Enter');
+    assert.strictEqual(await screen(), 'chars');
+    assert.strictEqual(await page.evaluate(() => document.querySelectorAll('.card.char.locked').length), 0);
+    await page.evaluate(() => PS.ui.focus(document.querySelector('[data-id="hunter"]')));
+    await page.keyboard.press('Enter');
+    assert.strictEqual(await screen(), 'ultimate');
+    assert.strictEqual(await page.evaluate(() => document.querySelectorAll('.card.ult').length), 12);
+    await page.evaluate(() => PS.ui.focus(document.querySelector('.card.ult[data-id="storm"]')));
+    await page.keyboard.press('Enter');
+    assert.strictEqual(await screen(), 'stages');
+    assert.strictEqual(await page.evaluate(() => document.querySelectorAll('.card.stage.locked').length), 0);
+    await page.evaluate(() => PS.ui.focus(document.querySelector('.card.stage[data-id="dungeon"]')));
+    await page.keyboard.press('Enter');
+    const r = await page.evaluate(() => ({ s: PS.app.state, e: PS.app.game.endless, w: PS.app.game.weapons.map((w) => w.id).join(','), st: PS.app.game.stageId }));
+    assert.deepStrictEqual(r, { s: 'play', e: true, w: 'cross,storm', st: 'dungeon' });
+  });
+
+  await step('无尽模式：同系终极武器直接替换初始武器', async () => {
+    const ids = await page.evaluate(() => new PS.Game('knight', 'graveyard', { endless: true, ultimate: 'bloodwhip' }).weapons.map((w) => w.id).join(','));
+    assert.strictEqual(ids, 'bloodwhip');
+  });
+
+  await step('无尽模式：武器、进化武器与道具可突破满级继续成长', async () => {
+    const r = await page.evaluate(() => {
+      PS.debug.calm();
+      const g = PS.app.game;
+      const cross = g.getWeapon('cross');
+      cross.level = cross.def.maxLevel;
+      g.recalcWeapon(cross);
+      const d8 = cross.st.dmg;
+      g.applyOption({ kind: 'wup', id: 'cross' });
+      const storm = g.getWeapon('storm');
+      const s1 = storm.st.dmg;
+      g.applyOption({ kind: 'wup', id: 'storm' });
+      const p = g.addPassive('spinach');
+      p.level = 5;
+      g.recalcStats();
+      const m5 = g.P.st.might;
+      g.applyOption({ kind: 'pup', id: 'spinach' });
+      const info = g.optionInfo({ kind: 'wup', id: 'cross' });
+      return { lv: cross.level, ratio: cross.st.dmg / d8, storm: storm.st.dmg / s1, might: +(g.P.st.might - m5).toFixed(3), desc: info.desc };
+    });
+    assert.strictEqual(r.lv, 9);
+    assert.ok(Math.abs(r.ratio - 1.15) < 1e-9, 'ratio ' + r.ratio);
+    assert.ok(Math.abs(r.storm - 1.15) < 1e-9, 'storm ' + r.storm);
+    assert.strictEqual(r.might, 0.05);
+    assert.ok(r.desc.startsWith('突破强化'), r.desc);
+  });
+
+  await step('无尽模式：全部满级后升级仍提供强化选项，不会只给金币', async () => {
+    const kinds = await page.evaluate(() => {
+      const g = PS.app.game;
+      for (const id of ['wand', 'knife', 'axe', 'garlic']) if (g.weapons.length < 6) g.addWeapon(id);
+      for (const id of ['armor', 'tome', 'wings', 'clover', 'crown']) if (g.passives.length < 6) g.addPassive(id);
+      for (const w of g.weapons) { w.level = Math.max(w.level, w.def.maxLevel); g.recalcWeapon(w); }
+      for (const p of g.passives) p.level = Math.max(p.level, p.def.max);
+      g.recalcStats();
+      const all = new Set();
+      for (let i = 0; i < 30; i++) for (const o of g.rollOptions()) all.add(o.kind);
+      return [...all].sort().join(',');
+    });
+    assert.strictEqual(kinds, 'pup,wup');
+  });
+
+  await step('无尽模式：15 分钟后最终 Boss 不会结束对局，进入下一轮', async () => {
+    const r = await page.evaluate(() => {
+      const g = PS.app.game;
+      g.updateSpawns = PS.Game.prototype.updateSpawns; // 恢复被 calm() 关闭的刷怪与事件
+      g.time = 899.99;
+      g.update(1 / 60, { x: 0, y: 0 });
+      g.update(1 / 60, { x: 0, y: 0 });
+      const boss = g.bosses[g.bosses.length - 1];
+      const n0 = g.events.length;
+      g.killEnemy(boss, null);
+      return { final: boss.final, cycle: g.cycle, more: g.events.length >= n0, nextMul: g.events.find((e) => e.t > 1700 && e.type === 'boss').mul, ending: g.ending, victory: g.victory };
+    });
+    assert.strictEqual(r.final, false);
+    assert.strictEqual(r.cycle, 1);
+    assert.ok(r.nextMul > 1.5, 'mul ' + r.nextMul);
+    assert.strictEqual(r.ending, false);
+    assert.strictEqual(r.victory, false);
+  });
+
+  await step('无尽模式：结算记录无尽最佳与金币，不计入普通模式解锁', async () => {
+    const before = await page.evaluate(() => ({ kills: PS.save.data.stats.totalKills, chars: PS.save.data.chars.length, gold: PS.save.data.gold }));
+    await page.evaluate(() => { const g = PS.app.game; g.kills += 5000; g.gold += 100; g.level = 99; g.P.revivals = 0; g.P.iframes = 0; g.P.dashInv = 0; g.hurtPlayer(1e9, 'test'); });
+    await wait(page, 2300);
+    assert.strictEqual(await screen(), 'over');
+    const after = await page.evaluate(() => ({ kills: PS.save.data.stats.totalKills, chars: PS.save.data.chars.length, gold: PS.save.data.gold, best: PS.save.data.stats.endlessBest.dungeon, text: document.querySelector('.record').textContent }));
+    assert.strictEqual(after.kills, before.kills);
+    assert.strictEqual(after.chars, before.chars);
+    assert.ok(after.gold >= before.gold + 100);
+    assert.ok(after.best >= 900);
+    assert.ok(after.text.includes('新纪录'), after.text);
+    // 再来一局保持无尽模式与终极武器
+    await wait(page, 900);
+    await page.keyboard.press('Enter');
+    assert.deepStrictEqual(await page.evaluate(() => [PS.app.game.endless, PS.app.game.weapons.map((w) => w.id).join(',')]), [true, 'cross,storm']);
+    await page.evaluate(() => { PS.app.gameOver({ quit: true }); PS.app.toMenu(); });
+  });
+
+  await step('普通模式仍保留解锁进度', async () => {
+    await page.evaluate(() => PS.ui.focus(document.querySelector('[data-act="start"]')));
+    await page.keyboard.press('Enter');
+    assert.ok((await page.evaluate(() => document.querySelectorAll('.card.char.locked').length)) > 0);
+    await page.evaluate(() => PS.ui.focus(document.querySelector('[data-id="hunter"]')));
+    await page.keyboard.press('Enter');
+    assert.strictEqual(await screen(), 'chars');
+    await page.keyboard.press('Escape');
   });
 
   await step('存档持久化：刷新后金币与强化保留', async () => {
