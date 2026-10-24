@@ -33,6 +33,8 @@
       this.stageId = stageId;
       this.ch = D.chars[charId];
       this.st = D.stages[stageId];
+      // 无尽模式金币减为 35%，避免刷金币让普通模式的养成失去意义
+      this.goldMul = this.st.goldMul * (this.endless ? 0.35 : 1);
       this.mapW = this.st.mapW;
       this.mapH = this.st.mapH;
       this.settings = PS.save.data.settings;
@@ -379,7 +381,7 @@
           items.push({ icon: 'bag', name: '金币袋', tag: '', desc: '+' + g + ' 金币' });
         }
       }
-      const gold = Math.round((tier === 2 ? U.randi(100, 160) : U.randi(20, 40)) * this.P.st.greed * this.st.goldMul);
+      const gold = Math.round((tier === 2 ? U.randi(100, 160) : U.randi(20, 40)) * this.P.st.greed * this.goldMul);
       this.gold += gold;
       this.run.chests++;
       PS.audio.sfx('chest');
@@ -412,7 +414,17 @@
     // 敌人生命倍率：前期线性，后期加速（让后期依然紧张）
     timeHpMul() {
       const m = this.time / 60;
-      return 1 + HP_PER_MIN * m + 0.012 * m * m + 0.0004 * m * m * m;
+      return (1 + HP_PER_MIN * m + 0.012 * m * m + 0.0004 * m * m * m) * this.endlessMul(1.12);
+    }
+    // 无尽模式 15 分钟后的持续强化：每分钟乘以 base，并随时间加速，最终总会压倒玩家
+    endlessMul(base) {
+      if (!this.endless) return 1;
+      const over = Math.max(0, this.time / 60 - 15);
+      return Math.pow(base, over) * (1 + 0.008 * over * over);
+    }
+    endlessSpeed() {
+      if (!this.endless) return 1;
+      return Math.min(1.5, 1 + 0.012 * Math.max(0, this.time / 60 - 15));
     }
 
     spawnEnemy(type, x, y, opts) {
@@ -425,7 +437,7 @@
       const hp = d.hp * this.st.hpMul * this.timeHpMul() * (elite ? ELITE_HP : 1);
       const e = {
         uid: this.uid++, type, def: d, spr: d.spr, x, y, kbx: 0, kby: 0, hp, maxHp: hp,
-        spd: d.spd * (elite ? 1.1 : 1), dmg: d.dmg * this.st.dmgMul * (1 + 0.04 * m) * (elite ? 1.5 : 1),
+        spd: d.spd * (elite ? 1.1 : 1) * this.endlessSpeed(), dmg: d.dmg * this.st.dmgMul * (1 + 0.04 * m) * this.endlessMul(1.05) * (elite ? 1.5 : 1),
         r: d.r * (elite ? 1.6 : 1), kbRes: elite ? 0.9 : d.kb, xp: d.xp * (elite ? 12 : 1), elite, boss: false,
         flash: 0, slowT: 0, frozenT: 0, hitT: {}, anim: Math.random() * 10, face: 1,
         ranged: d.ranged || null, shootT: d.ranged ? U.rand(1, d.ranged.cd) : 0, fly: !!d.fly, color: PS.SPR[d.spr].color,
@@ -439,10 +451,10 @@
       const b = D.bosses[id];
       const pos = this.spawnPos(10);
       const mul = (ev.mul || 1) * this.st.hpMul * (1 + 0.04 * Math.min(this.level, 60));
-      const hp = b.hp * mul;
+      const hp = b.hp * mul * this.endlessMul(1.1);
       const e = {
         uid: this.uid++, type: id, def: b, spr: b.spr, boss: true, final: !!ev.final, x: pos.x, y: pos.y, hp, maxHp: hp,
-        spd: b.spd, dmg: b.dmg * this.st.dmgMul, r: b.r, kbRes: 1, xp: b.xp, flash: 0, slowT: 0, frozenT: 0, hitT: {},
+        spd: b.spd, dmg: b.dmg * this.st.dmgMul * this.endlessMul(1.05), r: b.r, kbRes: 1, xp: b.xp, flash: 0, slowT: 0, frozenT: 0, hitT: {},
         anim: 0, kbx: 0, kby: 0, face: 1, scale: 1, z: 0, alpha: 1, act: null, color: PS.SPR[b.spr].color, dead: false,
         attacks: b.attacks.map((a) => Object.assign({}, a, { timer: a.cd * U.rand(0.4, 0.9) })),
       };
@@ -941,7 +953,7 @@
 
     enemyShoot(x, y, nx, ny, spd, dmg, spr) {
       if (this.ebullets.length > 400) return;
-      this.ebullets.push({ x, y, vx: nx * spd, vy: ny * spd, r: 3, dmg, life: 6, spr: spr || 'eb_purple' });
+      this.ebullets.push({ x, y, vx: nx * spd, vy: ny * spd, r: 3, dmg: dmg * this.endlessMul(1.05), life: 6, spr: spr || 'eb_purple' });
       PS.audio.sfx('ebullet');
     }
 
@@ -1100,7 +1112,7 @@
     startEnding(t) {
       this.ending = true;
       this.endT = t;
-      this.gold += Math.floor(this.time / 60) * 10 * this.st.goldMul;
+      this.gold += Math.floor(this.time / 60) * 10 * this.goldMul;
     }
 
     hurtPlayer(raw, src) {
@@ -1294,7 +1306,7 @@
           break;
         case 'coin':
         case 'bag':
-          this.gold += p.v * P.st.greed * this.st.goldMul;
+          this.gold += p.v * P.st.greed * this.goldMul;
           PS.audio.sfx('coin');
           break;
         case 'chicken':

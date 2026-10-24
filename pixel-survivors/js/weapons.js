@@ -7,9 +7,15 @@
   const B = {}; // 武器类型 → 行为
   const PROJ = {}; // 投射物类型 → 每帧更新
 
+  // 投射物总数上限：无尽模式后期武器等级极高时保护帧率（常驻投射物不受限制）
+  const MAX_PROJS = 600;
   function addProj(g, p) {
     p.uid = g.uid++;
     p.t = 0;
+    if (!p.persistent && g.projs.length >= MAX_PROJS) {
+      p.dead = true;
+      return p;
+    }
     p.dead = false;
     if (p.once) p.hitSet = new Set();
     if (!p.once && p.hitDelay === undefined) p.hitDelay = 0.5;
